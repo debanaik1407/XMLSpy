@@ -18,6 +18,7 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+pub mod fold;
 pub mod xsi;
 
 use alloc::string::String;
@@ -26,6 +27,13 @@ use xmlspy_core::WfError;
 
 /// Sentinel stored in `elem_end` while an element's end offset is still unknown.
 pub const END_UNKNOWN: u64 = u64::MAX;
+
+/// Sentinel stored in `elem_end` when an element's end is known to exist but has not been
+/// seen yet: the scanner writes it when a mismatched end tag closes an element whose own
+/// `>` was never read, and patches it afterwards. It can survive into a finished index, so
+/// consumers (folding, "go to matching tag") must treat it like [`END_UNKNOWN`] — it is not
+/// a usable offset.
+pub const END_PENDING: u64 = u64::MAX - 1;
 
 /// Sentinel stored in `elem_parent` for root elements.
 pub const NO_PARENT: i32 = -1;

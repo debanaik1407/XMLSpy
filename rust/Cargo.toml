@@ -4,6 +4,9 @@ members = [
     "crates/xmlspy-core",
     "crates/xmlspy-index",
     "crates/xmlspy-parse",
+    "crates/xmlspy-io",
+    "crates/xmlspy-rope",
+    "crates/xmlspy-parallel",
     "crates/xmlspy-wasm",
     "crates/xmlspy-cli",
 ]
@@ -19,7 +22,10 @@ authors = ["XMLSpy-rs contributors"]
 [workspace.dependencies]
 xmlspy-core = { path = "crates/xmlspy-core" }
 xmlspy-index = { path = "crates/xmlspy-index" }
+xmlspy-io = { path = "crates/xmlspy-io" }
+xmlspy-parallel = { path = "crates/xmlspy-parallel" }
 xmlspy-parse = { path = "crates/xmlspy-parse" }
+xmlspy-rope = { path = "crates/xmlspy-rope" }
 
 # Native release: fast.
 [profile.release]

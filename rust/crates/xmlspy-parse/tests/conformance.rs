@@ -236,3 +236,24 @@ fn error_cap_counts_everything_but_stores_a_prefix() {
     assert_eq!(ix.errors.len(), 5);
     assert_eq!(ix.error_count, 50);
 }
+
+/// The six diagnostics that only `rust/conformance/mini` exercises. The strings are
+/// byte-identical to `cases/not-wf/*.xml` and the needles to column 4 of `manifest.tsv`, so
+/// the file-based suite and this gate cannot drift apart: the suite is the report, this is the
+/// build-time check. (`npm run test:conformance` from `XMLSpy/` runs the same 41 cases against
+/// the TypeScript reference engine — that is the direction the parity contract runs in.)
+#[test]
+fn mini_suite_diagnostics() {
+    // cases/not-wf/malformed-cdata-start.xml — [19] CDStart
+    assert_err("<a><![CD[x]]></a>", "Malformed CDATA section start");
+    // cases/not-wf/unknown-markup-declaration.xml — [29] markupdecl
+    assert_err("<!FOO bar>\n<a/>", "Unknown markup declaration");
+    // cases/not-wf/comment-bad-start.xml — [15] Comment
+    assert_err("<a><!-x-></a>", "Comment must start with");
+    // cases/not-wf/invalid-character-in-name.xml — [5] Name
+    assert_err("<a$b/>", "Invalid character in element name");
+    // cases/not-wf/end-tag-without-name.xml — [42] ETag
+    assert_err("<a></ >", "End tag must start with a name");
+    // cases/not-wf/junk-in-start-tag.xml — [39] element · [40] STag
+    assert_err("<a x=\"1\",y=\"2\"/>", "Unexpected character in start tag");
+}

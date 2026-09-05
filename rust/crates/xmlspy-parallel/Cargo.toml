@@ -1,0 +1,18 @@
+[package]
+name = "xmlspy-parallel"
+description = "Parallel index builder for the XMLSpy-rs engine: a sequential split pass picks exact resumable cut points, one thread scans each segment, and the merge reproduces the sequential index bit for bit. Includes the write-ahead-journal resume path."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+xmlspy-core.workspace = true
+xmlspy-index.workspace = true
+xmlspy-io.workspace = true
+xmlspy-parse.workspace = true
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"

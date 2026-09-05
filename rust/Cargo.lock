@@ -8,7 +8,10 @@ version = "0.1.0"
 dependencies = [
  "xmlspy-core",
  "xmlspy-index",
+ "xmlspy-io",
+ "xmlspy-parallel",
  "xmlspy-parse",
+ "xmlspy-rope",
 ]
 
 [[package]]
@@ -23,12 +26,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "xmlspy-io"
+version = "0.1.0"
+dependencies = [
+ "xmlspy-core",
+]
+
+[[package]]
+name = "xmlspy-parallel"
+version = "0.1.0"
+dependencies = [
+ "xmlspy-core",
+ "xmlspy-index",
+ "xmlspy-io",
+ "xmlspy-parse",
+]
+
+[[package]]
 name = "xmlspy-parse"
 version = "0.1.0"
 dependencies = [
  "xmlspy-core",
  "xmlspy-index",
 ]
+
+[[package]]
+name = "xmlspy-rope"
+version = "0.1.0"
 
 [[package]]
 name = "xmlspy-wasm"

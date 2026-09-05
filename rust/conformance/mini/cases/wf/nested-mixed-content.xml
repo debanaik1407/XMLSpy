@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<Orders xmlns="urn:xmlspy:orders" xmlns:x="urn:xmlspy:x" count="3">
+  <!-- three records -->
+  <Order id="0" x:state="new"><Item sku="A-0">Widget &amp; Co</Item><City>Pune</City></Order>
+  <Order id="1"><Item sku="A-1">Gadget</Item><City>Zürich</City></Order>
+  <Order id="2"><Item sku="A-2"><![CDATA[raw <text>]]></Item><City/></Order>
+</Orders>

@@ -1,0 +1,51 @@
+# XMLSpy-rs mini conformance suite — see README.md in this directory.
+#
+# Columns (tab separated):
+#   id      stable case id
+#   status  wf = the document is well-formed, not-wf = it is not
+#   file    path relative to this directory
+#   expect  substring a reported diagnostic must contain ('-' for wf cases);
+#           a not-wf case passes only when the scanner reports this, not merely something
+#   spec    the XML 1.0 (5th ed.) production or well-formedness constraint exercised
+id	status	file	expect	spec
+wf-001	wf	cases/wf/declaration-and-empty-root.xml	-	[23] XMLDecl · [1] document
+wf-002	wf	cases/wf/attributes-and-text.xml	-	[41] Attribute · [10] AttValue · [44] EmptyElemTag
+wf-003	wf	cases/wf/comments-pis-and-references.xml	-	[15] Comment · [67] CharRef · [68] EntityRef
+wf-004	wf	cases/wf/cdata-section.xml	-	[18] CDSect · [19] CDStart · [20] Data
+wf-005	wf	cases/wf/processing-instruction.xml	-	[16] PI · [17] PITarget
+wf-006	wf	cases/wf/doctype-internal-subset.xml	-	[28] doctypedecl · [29] markupdecl
+wf-007	wf	cases/wf/utf8-bom.xml	-	F.1 · UTF-8 byte-order mark
+wf-008	wf	cases/wf/unicode-names-and-text.xml	-	[5] Name · [2] Char
+wf-009	wf	cases/wf/cdata-terminator-escaped.xml	-	[20] Data · WFC: No ]]> in content
+wf-010	wf	cases/wf/character-and-custom-refs.xml	-	[67] CharRef · [68] EntityRef
+wf-011	wf	cases/wf/nested-mixed-content.xml	-	[1] document · [39] element · [43] content
+nwf-001	not-wf	cases/not-wf/mismatched-end-tag.xml	does not match start tag	WFC: Element Type Match
+nwf-002	not-wf	cases/not-wf/skipped-end-tags.xml	does not match start tag	WFC: Element Type Match
+nwf-003	not-wf	cases/not-wf/stray-end-tag.xml	no element is open	WFC: Element Type Match
+nwf-004	not-wf	cases/not-wf/unclosed-elements.xml	element(s) not closed	[1] document · end of file
+nwf-005	not-wf	cases/not-wf/duplicate-attribute.xml	specified more than once	WFC: Unique Att Spec
+nwf-006	not-wf	cases/not-wf/unquoted-attribute-value.xml	Attribute value must be quoted	[10] AttValue
+nwf-007	not-wf	cases/not-wf/bare-ampersand.xml	Unescaped '&'	WFC: No bare ampersand
+nwf-008	not-wf	cases/not-wf/malformed-character-reference.xml	Malformed entity/character reference	[67] CharRef
+nwf-009	not-wf	cases/not-wf/double-hyphen-in-comment.xml	'--' is not allowed inside comments	[15] Comment
+nwf-010	not-wf	cases/not-wf/cdata-terminator-in-text.xml	']]>' is not allowed in element content	[20] Data
+nwf-011	not-wf	cases/not-wf/lt-in-text.xml	must be followed by an element name	[40] STag
+nwf-012	not-wf	cases/not-wf/lt-in-attribute-value.xml	not allowed in attribute values	WFC: No < in Attribute Values
+nwf-013	not-wf	cases/not-wf/two-root-elements.xml	more than one root element	[1] document
+nwf-014	not-wf	cases/not-wf/text-before-root.xml	before the root element	[3] Misc · [1] document
+nwf-015	not-wf	cases/not-wf/text-after-root.xml	after the root element	[3] Misc · [1] document
+nwf-016	not-wf	cases/not-wf/empty-document.xml	Document is empty or has no root element	[1] document
+nwf-017	not-wf	cases/not-wf/truncated-start-tag.xml	Unexpected end of file inside markup	[40] STag · end of file
+nwf-018	not-wf	cases/not-wf/truncated-comment.xml	Unexpected end of file inside markup	[15] Comment · end of file
+nwf-019	not-wf	cases/not-wf/unterminated-cdata.xml	Unexpected end of file inside markup	[18] CDSect · end of file
+nwf-020	not-wf	cases/not-wf/malformed-cdata-start.xml	Malformed CDATA section start	[19] CDStart
+nwf-021	not-wf	cases/not-wf/unknown-markup-declaration.xml	Unknown markup declaration	[29] markupdecl
+nwf-022	not-wf	cases/not-wf/comment-bad-start.xml	Comment must start with	[15] Comment
+nwf-023	not-wf	cases/not-wf/invalid-character-in-name.xml	Invalid character in element name	[5] Name
+nwf-024	not-wf	cases/not-wf/empty-start-tag-name.xml	must be followed by an element name	[40] STag
+nwf-025	not-wf	cases/not-wf/end-tag-without-name.xml	End tag must start with a name	[42] ETag
+nwf-026	not-wf	cases/not-wf/junk-in-start-tag.xml	Unexpected character in start tag	[39] element · [40] STag
+nwf-027	not-wf	cases/not-wf/attribute-without-equals.xml	=	[41] Attribute
+nwf-028	not-wf	cases/not-wf/self-closing-tag-without-gt.xml	Unexpected end of file inside markup	[44] EmptyElemTag · end of file
+nwf-029	not-wf	cases/not-wf/unterminated-entity-reference.xml	reference	[68] EntityRef
+nwf-030	not-wf	cases/not-wf/unterminated-doctype-subset.xml	Unexpected end of file inside markup	[28] doctypedecl · end of file

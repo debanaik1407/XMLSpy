@@ -5,6 +5,22 @@
 ✅ `cargo test` 41 tests / `cargo clippy -D warnings` clean · ✅ `npm run test:parity` 84/84 ·
 ⚠️ still no browser (Playwright) tests, no CI, no linter
 
+> **2026-09-05 (later) — Phase 1 engine work written, not compiled.** The five items below
+> (`xmlspy-io`, `xmlspy-rope`, `xmlspy-parallel`, `xmlspy-index::fold`, the conformance runner)
+> were added in a sandbox with **no Rust toolchain and no network**: `cargo`, `rustc`,
+> crates.io, static.rust-lang.org and w3.org are all unreachable there, so none of it has been
+> through `cargo build`, let alone `cargo test`. It is written to the workspace's rules (zero
+> external crates, `no_std` + `alloc` where possible, `unsafe` confined to one audited module)
+> and it is heavily documented and test-covered *on paper*. **The first thing to do on a
+> machine with Rust is `cd rust && ./verify-phase1.sh`**, which builds, lints, tests,
+> benchmarks and runs conformance, prints a PASS/FAIL table, and produces the numbers that
+> belong in `bench/reports/`. Expect to fix compile errors before anything else; the
+> `cargo test 41 tests` line above describes the tree *before* this work.
+>
+> One piece **is** verified, because it does not need Rust: the vendored 41-case conformance
+> suite was run against the TypeScript reference engine with a new
+> `npm run test:conformance` — **41/41, 100 %** (see `rust/conformance/mini/README.md`).
+
 ---
 
 ## 1. Executive summary
@@ -15,7 +31,8 @@ with the original TypeScript engine retained as a byte-for-byte-equivalent fallb
 
 **2026-09-05 update — the Rust engine is real.** `rust/` is a five-crate Cargo workspace with no
 external dependencies that compiles to both `wasm32-unknown-unknown` (68 KB, inlined in the
-bundle as base64) and a native `xmlspy` CLI. Scanning, the structural index and the streaming
+bundle as base64) and a native `xmlspy` CLI. *(It is an eight-crate workspace now — `xmlspy-io`,
+`xmlspy-rope` and `xmlspy-parallel` joined it later the same day; see §4 Phase 1.)* Scanning, the structural index and the streaming
 Find all run in it; the status bar shows **⚙ Rust/WASM** or **⚙ TS fallback**. Measured on a
 64 MiB corpus, single thread: 301 MB/s native, **252 MB/s in WASM**, 65 MB/s for the TypeScript
 scanner — a 3.9× speed-up for the shipped path. `src/docs/rustCode.ts` (Ctrl+5) is still the
@@ -37,8 +54,9 @@ crates win.
 | SmartFix | 10 syntactic fixes, no schema-aware fixes | **35 %** |
 | Architecture & roadmap docs | Complete | **100 %** |
 | Rust engine — scanner, index, `.xsi`, WASM, CLI | **Working, shipped in the browser** | **60 %** |
-| Rust engine — parallel scan, mmap, edit rope, server | Not started | **0 %** |
-| Tests (Rust unit/conformance + engine parity) | 41 Rust tests + 84 parity checks | **45 %** |
+| Rust engine — mmap, parallel scan, journal/recovery, edit rope, folding | **Written, not compiled** (no toolchain in the sandbox) | **70 %** |
+| Rust engine — engine server | Not started | **0 %** |
+| Tests (Rust unit/conformance + engine parity) | 41 verified Rust tests + 84 parity checks, plus ~120 new unverified ones | **50 %** |
 | CI / lint / release pipeline | **Not started** | **0 %** |
 
 **Menu coverage:** ~40 of ~100 menu commands are wired to real behaviour; the other ~60 are
@@ -248,15 +266,78 @@ Breakdown of unwired items: Phase 1 → 3, Phase 2 → 3, Phase 3 → 17, Phase 
       (no BigInt), base64-inlined so the single-file build keeps working
 - [x] **Engine parity harness** — `npm run test:parity`: 27 documents × 3 chunk sizes, all index
       arrays + every diagnostic string, plus the minified worker source run in a VM
-- [ ] `ByteSource` mmap on native (the CLI streams 8 MiB `read()` chunks instead) and audited `mmap.rs`
-- [ ] Parallel index builder (rayon) + write-ahead journal
-- [ ] Rope-of-pieces edit buffer with proptest round-trips
-- [ ] Code folding via the index, bracket matching, bookmarks (Ctrl+F2)
-- [ ] Crash recovery from journal; cache eviction policy
-- [ ] Session restore; W3C not-wf conformance suite at 100 %
+- [x] **`ByteSource` mmap on native + audited `mmap.rs`** — new crate **`xmlspy-io`**: `Mmap`
+      (raw `extern "C"` mmap/munmap, the workspace's *only* `unsafe`, with a written audit of
+      every invariant), `MmapSource` / `FileSource` / `Backed` behind one `ByteSource`,
+      `open_byte_source()` choosing between them, `stream_chunks()` for the commands that only
+      need a stream, and `as_slice()` so threads can share a mapped document with no copy.
+      Every CLI command reads through it now and reports the backend it got (`mmap` /
+      `buffered`). **⚠ not compiled — no Rust toolchain in the sandbox.**
+- [x] **Parallel index builder + write-ahead journal** — new crate **`xmlspy-parallel`**. Not
+      rayon (the workspace keeps zero external crates): `std::thread::scope` + `mpsc`. One
+      sequential *split pass* of the real `Scanner` with `max_indexed = 0` captures exact
+      `BoundaryState`s at depth-1 element closes; one thread scans each segment from its
+      boundary; the merge renumbers ids, remaps parents, re-applies the **global** element
+      budget, concatenates checkpoints/diagnostics and patches the top-level element's end
+      offset — producing an index **bit-identical** to a sequential scan. `src/merge.rs`
+      carries the proof that a segment always retains a superset of what the merge keeps (the
+      only thing standing between this crate and a silently truncated index);
+      `tests/parity.rs` asserts equality over 45 corpora × 1–8 threads × budgets 0–100 000 ×
+      strides 1–32, plus journal resume, short-read streaming and cache round-trips. The split
+      pass is sequential and costs a fraction `c` of a scan, so the speed-up ceiling is
+      `1/(c + 1/N)`: reported, not sold as linear scaling. **⚠ not compiled.**
+- [x] **Rope-of-pieces edit buffer with property-tested round-trips** — new crate
+      **`xmlspy-rope`** (`no_std` + `alloc`): immutable original buffer + append-only add
+      buffer, `insert`/`delete`/`replace` with full coalescing after every mutation,
+      `try_each_chunk` streamed save (copies only what changed), `unchanged_ratio`,
+      `original_runs`, and line helpers that mirror the browser document model. Not `proptest`
+      (zero-dep rule): `tests/props.rs` is a deterministic oracle suite — 5 seeds × 1500 random
+      operations against a `Vec<u8>` model, invariants re-checked after *every* operation, plus
+      wipe-and-rebuild losslessness and the "3-byte edit in 4 MiB ⇒ 3 pieces, 2 original runs,
+      ratio > 0.999999" gate. **⚠ not compiled.**
+- [x] **Code folding via the index, bracket matching, bookmarks** (engine side) — new
+      **`xmlspy-index::fold`**: `fold_regions` / `fold_regions_in` (line-accurate,
+      viewport-scoped, one forward pass), `line_at` / `line_offset` / `lines_for`
+      (checkpoint-based offset⇄line, 1-based), `bracket_at` (`O(log n + depth)` tag matching
+      that honours `>` inside quoted attribute values), `enclosing`, `Bookmarks` (Ctrl+F2
+      toggle, wrapping F2/Shift+F2 walk) and `FoldSet`, both with stable `XBK1`/`XFD1`
+      encodings for session restore. Surfaced as `xmlspy fold`. Comments, PIs and CDATA are not
+      foldable: the index records elements only — that is a `.xsi` v2 conversation.
+- [ ] **Folding/brackets/bookmarks in the Text View UI** — gutter fold markers, Ctrl+F2,
+      "go to matching tag", bookmark persistence across reloads. The engine answers every one
+      of those questions; the editor does not ask yet.
+- [x] **Crash recovery from journal; cache eviction policy** — `xmlspy-io::journal`: a
+      CRC-guarded `XSJ1` write-ahead log whose segment entries are appended **as threads
+      finish** (not at the end), readable back through a torn tail (`recover()`: header-CRC
+      gate, scan to the first bad entry, last-write-wins, `missing()` for the gaps).
+      `xmlspy-io::cache`: `.xsi` entries keyed by length + nanosecond mtime + a CRC of the
+      first and last 4 KiB, under a byte budget with LRU eviction that always spares the
+      newest entry. `resume_file()` / `xmlspy recover` re-runs the (cheap) split pass to
+      rebuild the `BoundaryState`s the journal deliberately does not store, re-scans only the
+      missing segments, and merges — a committed build deletes its log. **⚠ not compiled.**
+- [ ] **Session restore** — the engine-side pieces are there (`Bookmarks`/`FoldSet` encodings,
+      the `.xsi` cache, the rope's unchanged-original model), but there is no session document
+      yet: open files, carets and selections, fold state, unsaved rope overlays, and the app's
+      IndexedDB/localStorage side of it.
+- [ ] **W3C not-wf conformance suite at 100 %** — the *runner* is done (`xmlspy conformance`,
+      plus `xmlspy-cli::conformance` as a library so `cargo test` gates it): manifest mode with
+      per-case expected diagnostic substrings, and directory mode that classifies an unpacked
+      W3C `xmlconf` tree by path (`not-wf/` must fail; `wf/`, `valid/`, `invalid/` must not).
+      A 41-case mini suite is vendored at `rust/conformance/mini` (11 wf, 30 not-wf, one case
+      per production/WFC the scanner implements, each also asserted by a Rust test so the two
+      cannot drift). **That suite has been verified at 100 % — 41/41 — against the TypeScript
+      reference engine** by the new `npm run test:conformance`
+      (`XMLSpy/scripts/conformance-mini.mjs`, same documents, same runner config, same verdict
+      rule), so what is left on this line is Rust-side execution, not suite authoring. The
+      **real** `xmlconf` tree is not vendored — w3.org is unreachable from the sandbox — so the
+      100 % number the gate asks for does not exist yet: download it and run
+      `xmlspy conformance --suite xmlconf/xmltest` (see `rust/conformance/mini/README.md`).
 - [ ] Perf gates: 10 GiB first paint < 2 s; **≥ 500 MB/s 1-thread (currently 323 MB/s native /
       252 MB/s WASM on a 2-vCPU sandbox — `xmlspy bench` reports this as FAIL)**; ≥ 1.2 GB/s
-      8-thread (no parallel scan yet); RSS < 512 MB **(PASS: 75 MiB on 256 MiB)**; p99 frame < 16 ms
+      8-thread **(the parallel scan now exists; a 2-vCPU sandbox cannot measure it — run
+      `xmlspy bench big.xml --threads 8 --min-segment 1MiB` on real hardware)**; RSS < 512 MB
+      **(PASS: 75 MiB on 256 MiB)**; p99 frame < 16 ms. Numbers above predate mmap and the
+      parallel builder: `rust/verify-phase1.sh` regenerates all of them in one run.
 
 ### Phase 2 — Grid, validation, XPath
 - [ ] Streaming **XSD 1.0 validator** (PSVI-lite) + **DTD validator**
@@ -350,18 +431,29 @@ Breakdown of unwired items: Phase 1 → 3, Phase 2 → 3, Phase 3 → 17, Phase 
 | 7 | Minimal streaming **XSD 1.0 validator** (structure + simple types) | F8 is the flagship XMLSpy action and does nothing today | 5 d |
 | 8 | Grid View editing (cell edit → overlay → re-index) | Makes Grid a real editor, reuses existing overlay plumbing | 3 d |
 | 9 | Real XPath 2.0/3.1 evaluator over the index (predicates, functions, axes) | Replaces the native-1.0 path and the index subset; the panel's `(Phase 3)` entries become real | 5 d |
-| 10 | Code folding + bracket matching + bookmarks in Text View | Remaining Phase-1 Text View scope | 3 d |
+| 10 | Code folding + bracket matching + bookmarks in **Text View** | The engine side is done (`xmlspy-index::fold`); only the editor UI is left | 2 d |
 
 **Strategic decision — answered (2026-09-05):** the Rust/WASM engine was built and is now the
 default execution path in the browser. The TypeScript scanner stays as the fallback and as the
 behavioural reference the parity suite diffs against. Remaining Rust work, in value order:
 
-1. **Parallel chunked scan** — the only credible route to the ≥ 500 MB/s gate; the scanner is
-   already resumable, so the machinery exists.
-2. **`wf` without building the index** — the index arrays dominate per-element cost.
+0. **Compile and verify the Phase 1 crates** — `cd rust && ./verify-phase1.sh`. They were
+   written without a toolchain, so this is the gate everything else waits on.
+1. ~~**Parallel chunked scan**~~ — **done, unverified**: `xmlspy-parallel` (split pass →
+   threaded segments → exact merge). It is the only credible route to the ≥ 500 MB/s gate, and
+   the ceiling is `1/(c + 1/N)` because the split pass is sequential; measure `c` before
+   promising anything.
+2. ~~**`wf` without building the index**~~ — **done**: `xmlspy wf` scans with
+   `max_indexed = 0`, so no records are retained; `xmlspy bench` reports that route and the
+   full-index route separately.
 3. Move validation (XSD/DTD) into Rust rather than writing it twice.
-4. Native `mmap` `ByteSource`, and IndexedDB persistence of the `.xsi` for instant re-open.
-5. CI that rebuilds the module and fails when `src/engine/wasmBinary.ts` is out of date.
+4. ~~Native `mmap` `ByteSource`~~ — **done, unverified** (`xmlspy-io`), and the `.xsi` cache on
+   disk is done too (length + mtime + edge-CRC key, byte budget, LRU). Still open: IndexedDB
+   persistence of the `.xsi` in the browser for instant re-open.
+5. CI that rebuilds the module and fails when `src/engine/wasmBinary.ts` is out of date —
+   `verify-phase1.sh` is the Phase 1 half of that job.
+6. Expose the new engine surfaces over the C ABI (`xmlspy-wasm`): folding/brackets/bookmarks
+   and the rope, so the browser can use them instead of re-implementing them in TypeScript.
 
 ---
 
@@ -372,17 +464,29 @@ cd XMLSpy              # the app lives in the nested folder
 npm ci
 npx tsc --noEmit       # currently clean
 npm run test:parity    # 84/84 — Rust/WASM engine vs the TypeScript engine
+npm run test:conformance  # 41/41 — the vendored mini suite vs the TypeScript reference
 npm run build          # succeeds → dist/index.html (single file, ~490 KB)
 npm run dev            # http://localhost:5173
 
 cd ../rust             # the engine (needs Rust only if you change it)
-cargo test                                   # 41 tests
-cargo clippy --all-targets -- -D warnings    # clean
-cargo fmt --all -- --check                   # clean
+./verify-phase1.sh                           # ← start here: builds, lints, tests, benches,
+                                             #   runs conformance, prints a PASS/FAIL table
+cargo test                                   # 41 verified tests + the new (unverified) suites
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
 ./build-wasm.sh                              # regenerates ../XMLSpy/src/engine/wasmBinary.ts
 cargo run -p xmlspy-cli --release -- gen --size 256MiB --out /tmp/big.xml
-cargo run -p xmlspy-cli --release -- bench /tmp/big.xml
+cargo run -p xmlspy-cli --release -- bench /tmp/big.xml --threads 8 --min-segment 1MiB
+cargo run -p xmlspy-cli --release -- conformance --verbose      # vendored 41-case mini suite
+XMLCONF=/path/to/xmlconf/xmltest \
+  cargo run -p xmlspy-cli --release -- conformance --suite "$XMLCONF"   # the real W3C suite
 ```
+
+The `cargo test` / `clippy` / `fmt` "clean" marks above describe the tree **before** the
+2026-09-05 Phase 1 additions (`xmlspy-io`, `xmlspy-rope`, `xmlspy-parallel`,
+`xmlspy-index::fold`, `xmlspy-cli::conformance`), which have never been compiled. `Cargo.lock`
+was updated by hand for the three new workspace members; cargo will re-verify it on the first
+build (drop `--locked` from any wrapper that uses it, or just let cargo rewrite it).
 
 In-app checks: status bar shows **⚙ Rust/WASM** · `Ctrl+5` Architecture/Roadmap/Rust engine ·
 `F7` well-formedness ·

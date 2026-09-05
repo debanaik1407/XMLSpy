@@ -1,6 +1,10 @@
 //! Single-pass XML scanning, indexing and searching for multi-GB documents.
 //!
 //! * [`scanner::Scanner`] — resumable well-formedness scanner + structural indexer.
+//! * [`scanner::BoundaryState`] — the resumable state at a byte boundary, captured with
+//!   [`scanner::Scanner::boundary`] and restored with [`scanner::Scanner::resume`]. This is
+//!   what lets `xmlspy-parallel` cut a document into segments and scan them on separate
+//!   threads without the cut changing a single byte of the resulting index.
 //! * [`search::Finder`] — chunk-resumable literal search with line/column tracking.
 //! * [`classify`] — SWAR byte classification used by the hot loop.
 //!
@@ -20,7 +24,9 @@ pub mod classify;
 pub mod scanner;
 pub mod search;
 
-pub use scanner::{Progress, Scanner, ScannerConfig, END_PENDING};
+pub use scanner::{
+    BoundaryState, Progress, Scanner, ScannerConfig, St, END_PENDING, MAX_DEPTH0_CLOSES,
+};
 pub use search::{Finder, Hit};
 pub use xmlspy_core::{Severity, WfError};
 pub use xmlspy_index::{StructuralIndex, END_UNKNOWN, NO_PARENT};

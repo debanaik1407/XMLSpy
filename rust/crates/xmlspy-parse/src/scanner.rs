@@ -16,9 +16,15 @@ use crate::classify::{
     find_any4, find_name_end, find_text_delim, is_name_char, is_name_start, is_ws,
 };
 
-/// Element end offset that is known to exist but has not been seen yet
-/// (the matching `</name` was read, the closing `>` was not).
-pub const END_PENDING: u64 = u64::MAX - 1;
+// Defined next to `END_UNKNOWN` in `xmlspy-index`, because it is part of the index's
+// on-disk vocabulary: a decoded `.xsi` may contain it and every consumer has to know that
+// it is not an offset. Re-exported here so `xmlspy_parse::END_PENDING` keeps working.
+pub use xmlspy_index::END_PENDING;
+
+/// Cap on the depth-0 close offsets recorded by one split pass. A document with more
+/// root-level elements than this is malformed anyway; the parallel builder falls back to
+/// a single-threaded scan rather than lose the record.
+pub const MAX_DEPTH0_CLOSES: usize = 4096;
 
 /// Tuning knobs for one scan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,35 +47,195 @@ impl Default for ScannerConfig {
     }
 }
 
+/// One state of the scanner's byte-level machine.
+///
+/// Public because [`BoundaryState`] carries it: the parallel index builder has to know
+/// whether a byte offset is a *clean* boundary (state [`St::Text`], no half-read token)
+/// before it may hand the bytes after that offset to another thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum St {
+pub enum St {
+    /// Start of the document, matching a possible UTF-8 BOM (byte 1 of 3).
     Bom,
+    /// BOM byte 2 of 3.
     Bom1,
+    /// BOM byte 3 of 3.
     Bom2,
+    /// Character data — the only state in which a chunk boundary is "clean".
     Text,
+    /// Inside `&…`, accumulating a character or entity reference.
     Ref,
+    /// Just saw `<`.
     Lt,
+    /// Reading an element name after `<`.
     StartName,
+    /// Inside a start tag, between attributes.
     InTag,
+    /// Reading an attribute name.
     AttrName,
+    /// Saw an attribute name, waiting for `=`.
     AttrEq,
+    /// Saw `=`, waiting for the opening quote.
     AttrPreq,
+    /// Inside a quoted attribute value.
     AttrVal,
+    /// Saw `/` in a start tag, waiting for `>`.
     Empty,
+    /// Reading an element name after `</`.
     EndName,
+    /// After an end-tag name, waiting for `>`.
     EndTrail,
+    /// Inside `<?…`.
     Pi,
+    /// Saw `?` inside a processing instruction, waiting for `>`.
     PiQ,
+    /// Just saw `<!`.
     Bang,
+    /// Saw `<!-`, waiting for the second `-`.
     Comment0,
+    /// Inside a comment.
     Comment,
+    /// Saw `-` inside a comment.
     CommentD1,
+    /// Saw `--` inside a comment, waiting for `>`.
     CommentD2,
+    /// Matching the `CDATA[` part of `<![CDATA[`.
     Cdata0,
+    /// Inside a CDATA section.
     Cdata,
+    /// Saw `]` inside a CDATA section.
     CdataB1,
+    /// Saw `]]` inside a CDATA section, waiting for `>`.
     CdataB2,
+    /// Inside a `<!DOCTYPE …>` declaration, counting the internal-subset brackets.
     Doctype,
+}
+
+/// Everything the scanner needs to continue at a byte boundary.
+///
+/// A [`Scanner`] is resumable: `feed` may be called with the document cut at *any*
+/// offset. [`BoundaryState`] is that cut made explicit — `Scanner::boundary()` captures
+/// it, [`Scanner::resume`] rebuilds a scanner from it, and the round trip is asserted by
+/// `tests/boundary.rs`:
+///
+/// ```text
+/// resume(cfg, scan(prefix).boundary()).feed(suffix) == scan(prefix + suffix)
+/// ```
+///
+/// The parallel index builder uses it to hand each thread a segment that starts at a
+/// *known* boundary, so a segment scan is bit-identical to the same bytes scanned in one
+/// pass. It deliberately does **not** carry the produced index (records, checkpoints,
+/// retained errors): those belong to the caller, which concatenates the segments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundaryState {
+    /// State of the byte machine at the boundary.
+    pub state: St,
+    /// State to return to when a reference ends.
+    pub ref_return: St,
+    /// Bytes of a half-read `&…` reference.
+    pub ref_buf: String,
+    /// Offset of the `&` that started [`BoundaryState::ref_buf`].
+    pub ref_start: u64,
+    /// Quote character of the attribute value being read (`0` = none).
+    pub quote: u8,
+    /// 1-based line at the boundary.
+    pub line: u64,
+    /// Offset of the first byte of that line.
+    pub line_start: u64,
+    /// Number of open elements.
+    pub depth: usize,
+    /// Interned names of the open elements, outermost first.
+    pub stack_name: Vec<u32>,
+    /// Index slot of each open element (`-1` = not retained by this scanner).
+    pub stack_idx: Vec<i32>,
+    /// Element-name table referenced by [`BoundaryState::stack_name`].
+    pub names: Vec<String>,
+    /// Attribute-name table referenced by [`BoundaryState::attr_names`].
+    pub attrs: Vec<String>,
+    /// Half-read element or attribute name.
+    pub name_buf: Vec<u8>,
+    /// Attribute names seen in the start tag being read (duplicate detection).
+    pub attr_names: Vec<u32>,
+    /// Offset of the first byte of that attribute's name.
+    pub attr_bytes_start: u64,
+    /// Offset of the `<` that opened the tag being read.
+    pub tag_start_off: u64,
+    /// How much of `CDATA[` has been matched.
+    pub cdata_match: usize,
+    /// Consecutive `]` seen in character data (for the `]]>` constraint).
+    pub text_bracket: u32,
+    /// Bracket nesting inside the DOCTYPE internal subset.
+    pub doctype_bracket: i32,
+    /// A root element has been opened.
+    pub root_seen: bool,
+    /// The root element has been closed.
+    pub root_closed: bool,
+    /// Non-whitespace character data was seen outside the root element.
+    pub saw_non_ws_outside_root: bool,
+    /// Index slots handed out so far (drives the element budget).
+    pub elem_count: usize,
+    /// Absolute offset of the boundary.
+    pub seen_bytes: u64,
+    /// [`Scanner::finish`] has run.
+    pub finished: bool,
+}
+
+impl BoundaryState {
+    /// The boundary at offset 0 of a document: what [`Scanner::new`] starts from.
+    pub fn initial() -> Self {
+        Self {
+            state: St::Bom,
+            ref_return: St::Text,
+            ref_buf: String::new(),
+            ref_start: 0,
+            quote: 0,
+            line: 1,
+            line_start: 0,
+            depth: 0,
+            stack_name: Vec::new(),
+            stack_idx: Vec::new(),
+            names: Vec::new(),
+            attrs: Vec::new(),
+            name_buf: Vec::new(),
+            attr_names: Vec::new(),
+            attr_bytes_start: 0,
+            tag_start_off: 0,
+            cdata_match: 0,
+            text_bracket: 0,
+            doctype_bracket: 0,
+            root_seen: false,
+            root_closed: false,
+            saw_non_ws_outside_root: false,
+            elem_count: 0,
+            seen_bytes: 0,
+            finished: false,
+        }
+    }
+
+    /// True when a scan may start here without inheriting a half-read token.
+    ///
+    /// This is the condition the parallel builder checks before trusting a segment
+    /// boundary; [`BoundaryState::depth`] and the open-element stack are still needed to
+    /// reproduce parents and depths, so a clean state alone is not enough.
+    pub fn is_clean(&self) -> bool {
+        matches!(self.state, St::Text)
+            && self.quote == 0
+            && self.name_buf.is_empty()
+            && self.ref_buf.is_empty()
+            && self.cdata_match == 0
+            && self.doctype_bracket == 0
+            && !self.finished
+        // `attr_names` is deliberately *not* required to be empty: it is only consulted in
+        // `St::AttrName` (duplicate-attribute detection) and is cleared by the next
+        // `open_element`, so a boundary in character data may legitimately still carry the
+        // attribute names of the last start tag. Carrying it is what makes a tag split
+        // across a chunk boundary resume exactly.
+    }
+}
+
+impl Default for BoundaryState {
+    fn default() -> Self {
+        Self::initial()
+    }
 }
 
 /// Live counters for progress reporting while a scan is running.
@@ -119,6 +285,18 @@ pub struct Scanner {
     elem_count: usize,
     seen_bytes: u64,
     finished: bool,
+
+    /// Absolute offsets at which the caller wants a [`BoundaryState`] captured
+    /// (the parallel index builder's split targets). Empty = no split tracking.
+    split_targets: Vec<u64>,
+    /// Next entry of `split_targets` to satisfy.
+    split_next: usize,
+    /// Captured split points: `(offset, boundary at that offset)`, ascending.
+    splits: Vec<(u64, BoundaryState)>,
+    /// Offsets just past the `>` that closed a depth-0 element (usually the root).
+    /// Recorded only while split tracking is on; the merge uses them to patch the
+    /// `elem_end` of root records that were created by an earlier segment.
+    depth0_closes: Vec<u64>,
 }
 
 impl Scanner {
@@ -161,6 +339,10 @@ impl Scanner {
             elem_count: 0,
             seen_bytes: 0,
             finished: false,
+            split_targets: Vec::new(),
+            split_next: 0,
+            splits: Vec::new(),
+            depth0_closes: Vec::new(),
         }
     }
 
@@ -264,7 +446,12 @@ impl Scanner {
         self.depth -= 1;
         let idx = self.stack_idx[self.depth];
         if idx >= 0 {
-            self.ix.elem_end[idx as usize] = end_off;
+            // Bounds-checked: a scanner resumed from a `BoundaryState` carries index slots
+            // that belong to the *caller's* index (the parallel builder seeds segments with
+            // slots owned by the merge), so the slot may not exist in this scanner's arrays.
+            if let Some(slot) = self.ix.elem_end.get_mut(idx as usize) {
+                *slot = end_off;
+            }
         }
         if self.depth == 0 {
             self.root_closed = true;
@@ -273,9 +460,46 @@ impl Scanner {
 
     fn patch_pending_end(&mut self, end_off: u64) {
         if let Some(&idx) = self.stack_idx.get(self.depth) {
-            if idx >= 0 && self.ix.elem_end[idx as usize] == END_PENDING {
+            if idx >= 0 && self.ix.elem_end.get(idx as usize) == Some(&END_PENDING) {
                 self.ix.elem_end[idx as usize] = end_off;
             }
+        }
+    }
+
+    /// Record a split point / depth-0 close just after a `>` at `off`.
+    ///
+    /// Called from the three places where an end tag or an empty-element tag completes.
+    /// `self.depth` has already been decremented, so `depth == 1` means "the element that
+    /// just closed was a child of the top-level element" — a boundary at which another
+    /// thread can start scanning without inheriting anything but the open-element stack.
+    /// Costs one comparison against an empty vector when split tracking is off.
+    fn note_close(&mut self, off: u64) {
+        if self.split_targets.is_empty() {
+            return;
+        }
+        if self.depth == 0 {
+            if self.depth0_closes.len() < MAX_DEPTH0_CLOSES {
+                self.depth0_closes.push(off);
+            }
+            return;
+        }
+        if self.depth != 1 {
+            return;
+        }
+        while self.split_next < self.split_targets.len()
+            && self.split_targets[self.split_next] <= off
+        {
+            let mut b = self.boundary();
+            // `seen_bytes` is only updated at the end of `feed`; the boundary is *here*.
+            b.seen_bytes = off;
+            // Every call site transitions to `St::Text` on this byte, but it does so through
+            // a local that is only committed to `self.state` at the end of the iteration, so
+            // `boundary()` would otherwise capture the *previous* state (`Empty`, `EndTag`,
+            // `EndTrail`) and a thread resumed from it would re-enter a token that has
+            // already completed. The state after this `>` is character data, always.
+            b.state = St::Text;
+            self.splits.push((off, b));
+            self.split_next += 1;
         }
     }
 
@@ -599,6 +823,7 @@ impl Scanner {
                 St::Empty => {
                     if b == b'>' {
                         self.close_element(off + 1);
+                        self.note_close(off + 1);
                         st = St::Text;
                     } else {
                         self.push_error(
@@ -676,6 +901,7 @@ impl Scanner {
                         st = if b == b'>' { St::Text } else { St::EndTrail };
                         if b == b'>' {
                             self.patch_pending_end(off + 1);
+                            self.note_close(off + 1);
                         }
                     }
                 }
@@ -683,6 +909,7 @@ impl Scanner {
                 St::EndTrail => {
                     if b == b'>' {
                         self.patch_pending_end(off + 1);
+                        self.note_close(off + 1);
                         st = St::Text;
                     } else if !is_ws(b) {
                         self.push_error(
@@ -914,6 +1141,121 @@ impl Scanner {
         s.finish(buf.len() as u64);
         s.into_index()
     }
+
+    /// Capture the complete resumable state at the current byte boundary.
+    ///
+    /// Cheap enough to call between chunks; the only allocations are clones of the
+    /// open-element stack and the (small) name tables.
+    pub fn boundary(&self) -> BoundaryState {
+        BoundaryState {
+            state: self.state,
+            ref_return: self.ref_return,
+            ref_buf: self.ref_buf.clone(),
+            ref_start: self.ref_start,
+            quote: self.quote,
+            line: self.line,
+            line_start: self.line_start,
+            depth: self.depth,
+            stack_name: self.stack_name.clone(),
+            stack_idx: self.stack_idx.clone(),
+            names: self.names.names.clone(),
+            attrs: self.attrs.names.clone(),
+            name_buf: self.name_buf.clone(),
+            attr_names: self.attr_names.clone(),
+            attr_bytes_start: self.attr_bytes_start,
+            tag_start_off: self.tag_start_off,
+            cdata_match: self.cdata_match,
+            text_bracket: self.text_bracket,
+            doctype_bracket: self.doctype_bracket,
+            root_seen: self.root_seen,
+            root_closed: self.root_closed,
+            saw_non_ws_outside_root: self.saw_non_ws_outside_root,
+            elem_count: self.elem_count,
+            seen_bytes: self.seen_bytes,
+            finished: self.finished,
+        }
+    }
+
+    /// Rebuild a scanner that continues exactly where [`Scanner::boundary`] was taken.
+    ///
+    /// The resumed scanner starts with an **empty index** (no records, no checkpoints, no
+    /// retained errors) but with the caller's counters, so a segment scan reports its own
+    /// slice of the document and the caller concatenates the results. `elem_count`,
+    /// `depth` and the open-element stack are inherited, which is what makes `elem_parent`,
+    /// `elem_depth` and the element budget behave as if the scan had never been cut.
+    pub fn resume(cfg: ScannerConfig, b: BoundaryState) -> Self {
+        let stride = cfg.stride.max(1);
+        let mut ix = StructuralIndex {
+            stride,
+            line_count: b.line,
+            ..Default::default()
+        };
+        // A scan that starts at offset 0 owns `checkpoints[0] == 0`; a resumed segment
+        // must not duplicate it, because the merge concatenates checkpoint vectors.
+        if b.seen_bytes == 0 && b.state == St::Bom {
+            ix.checkpoints.push(0);
+        }
+        Self {
+            cfg: ScannerConfig { stride, ..cfg },
+            state: b.state,
+            ref_return: b.ref_return,
+            ref_buf: b.ref_buf,
+            ref_start: b.ref_start,
+            quote: b.quote,
+            line: b.line,
+            line_start: b.line_start,
+            depth: b.depth,
+            stack_name: b.stack_name,
+            stack_idx: b.stack_idx,
+            names: Interner::from_names(b.names),
+            attrs: Interner::from_names(b.attrs),
+            name_buf: b.name_buf,
+            attr_names: b.attr_names,
+            attr_bytes_start: b.attr_bytes_start,
+            tag_start_off: b.tag_start_off,
+            cdata_match: b.cdata_match,
+            text_bracket: b.text_bracket,
+            doctype_bracket: b.doctype_bracket,
+            root_seen: b.root_seen,
+            root_closed: b.root_closed,
+            saw_non_ws_outside_root: b.saw_non_ws_outside_root,
+            ix,
+            elem_count: b.elem_count,
+            seen_bytes: b.seen_bytes,
+            finished: b.finished,
+            split_targets: Vec::new(),
+            split_next: 0,
+            splits: Vec::new(),
+            depth0_closes: Vec::new(),
+        }
+    }
+
+    /// Ask this scanner to capture a [`BoundaryState`] at the first clean depth-1
+    /// boundary at or after each of `targets` (absolute byte offsets, ascending).
+    ///
+    /// This is the pre-pass of the parallel index builder: one sequential scan with
+    /// `max_indexed == 0` finds the split points, and every segment after a split point
+    /// can then be scanned by its own thread from an *exact* boundary.
+    ///
+    /// Also records the offsets just past each depth-0 element's `>` (see
+    /// [`Scanner::take_depth0_closes`]).
+    pub fn track_splits(&mut self, targets: Vec<u64>) {
+        self.split_targets = targets;
+        self.split_next = 0;
+        self.splits.clear();
+        self.depth0_closes.clear();
+    }
+
+    /// Split points captured since [`Scanner::track_splits`], ascending by offset.
+    pub fn take_splits(&mut self) -> Vec<(u64, BoundaryState)> {
+        core::mem::take(&mut self.splits)
+    }
+
+    /// Offsets just past the `>` that closed each depth-0 element, in document order
+    /// (capped at [`MAX_DEPTH0_CLOSES`]). Only filled while split tracking is on.
+    pub fn take_depth0_closes(&mut self) -> Vec<u64> {
+        core::mem::take(&mut self.depth0_closes)
+    }
 }
 
 /// Small open-addressing string interner (no external dependencies, `no_std`).
@@ -935,6 +1277,30 @@ impl Interner {
             buckets: alloc::vec![0u32; 256],
             last: u32::MAX,
         }
+    }
+
+    /// Rebuild an interner over names that were interned by another scanner
+    /// ([`Scanner::resume`]). Ids keep their meaning, so a `BoundaryState`'s
+    /// `stack_name` / `attr_names` stay valid.
+    fn from_names(names: Vec<String>) -> Self {
+        let mut cap = 256usize;
+        while names.len() * 2 >= cap {
+            cap *= 2;
+        }
+        let mut it = Self {
+            names,
+            buckets: alloc::vec![0u32; cap],
+            last: u32::MAX,
+        };
+        let mask = cap as u32 - 1;
+        for (id, name) in it.names.iter().enumerate() {
+            let mut h = Self::hash(name.as_bytes()) & mask;
+            while it.buckets[h as usize] != 0 {
+                h = (h + 1) & mask;
+            }
+            it.buckets[h as usize] = id as u32 + 1;
+        }
+        it
     }
 
     #[inline]

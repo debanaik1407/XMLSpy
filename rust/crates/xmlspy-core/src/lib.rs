@@ -159,6 +159,16 @@ pub trait ByteSource {
     /// Implementations may return fewer bytes than requested (at EOF), but never
     /// zero bytes for an in-bounds, non-empty request.
     fn chunk(&mut self, offset: u64, len: usize) -> Result<&[u8], SourceError>;
+
+    /// The whole document at once, when the backend is random-access (native `mmap`,
+    /// an in-memory buffer). `None` when the bytes can only be streamed, which is what
+    /// the browser's `Blob.slice` worker does.
+    ///
+    /// The parallel index builder requires `Some`: it hands each thread a `&[u8]` slice
+    /// of the document rather than a mutable reader.
+    fn as_slice(&self) -> Option<&[u8]> {
+        None
+    }
 }
 
 /// A [`ByteSource`] over a byte slice already in memory (tests, small documents).
@@ -187,6 +197,10 @@ impl ByteSource for SliceSource<'_> {
         let start = offset as usize;
         let end = core::cmp::min(self.bytes.len(), start.saturating_add(len));
         Ok(&self.bytes[start..end])
+    }
+
+    fn as_slice(&self) -> Option<&[u8]> {
+        Some(self.bytes)
     }
 }
 
@@ -217,6 +231,10 @@ impl ByteSource for VecSource {
         let end = core::cmp::min(self.bytes.len(), start.saturating_add(len));
         Ok(&self.bytes[start..end])
     }
+
+    fn as_slice(&self) -> Option<&[u8]> {
+        Some(&self.bytes)
+    }
 }
 
 /// Default streaming chunk size: 8 MiB = 2048 × 4 KiB pages.
@@ -235,6 +253,8 @@ mod tests {
         assert_eq!(s.chunk(0, 3).unwrap(), b"<a>");
         assert_eq!(s.chunk(9, 999).unwrap(), b"/a>");
         assert!(s.chunk(13, 1).is_err());
+        assert_eq!(s.as_slice(), Some(&b"<a>hello</a>"[..]));
+        assert_eq!(VecSource::new(Vec::new()).as_slice(), Some(&b""[..]));
     }
 
     #[test]
