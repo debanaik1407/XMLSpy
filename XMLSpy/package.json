@@ -7,8 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "build:wasm": "bash ../rust/build-wasm.sh",
+    "preview": "vite preview",
     "test:parity": "node scripts/parity.mjs",
-    "preview": "vite preview"
+    "test:xpath": "node scripts/xpath.test.mjs"
   },
   "dependencies": {
     "clsx": "2.1.1",
@@ -22,9 +23,11 @@
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "5.1.1",
+    "@xmldom/xmldom": "^0.9.12",
     "tailwindcss": "4.1.17",
     "typescript": "5.9.3",
     "vite": "7.3.2",
-    "vite-plugin-singlefile": "2.3.0"
+    "vite-plugin-singlefile": "2.3.0",
+    "xpath": "^0.0.34"
   }
 }

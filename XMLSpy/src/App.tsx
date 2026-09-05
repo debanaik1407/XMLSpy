@@ -10,7 +10,7 @@ import { XmlDocument, fmtBytes, fmtNum } from "./engine/document";
 import { createScannerAuto, engineInfo, engineName, loadEngine } from "./engine/engine";
 import { EngineWorker, type SearchHit } from "./engine/worker";
 import { SAMPLE_BROKEN, SAMPLE_ORDERS, SAMPLE_XSD, generateCorpus } from "./engine/corpus";
-import { evaluateXPath, type XPathResult } from "./engine/xpath";
+import { evaluateXPath, type NsMode, type XPathResult } from "./engine/xpath";
 import { prettyPrint } from "./engine/highlight";
 import { inferSchema, schemaToXsd } from "./engine/schemaInfer";
 
@@ -326,14 +326,18 @@ export default function App() {
     }
   };
 
-  const runXPath = async (expr: string) => {
+  const runXPath = async (expr: string, nsMode: NsMode = "smart") => {
     if (!active) return;
     setXpRunning(true);
     setXpError(null);
     try {
-      const r = await evaluateXPath(active, expr);
+      const r = await evaluateXPath(active, expr, { nsMode });
       setXpResult(r);
-      log("info", `XPath ${expr} → ${r.kind === "value" ? r.value : fmtNum(r.count) + " node(s)"} in ${r.elapsedMs.toFixed(1)} ms [${r.engine}]`);
+      log(
+        "info",
+        `XPath ${expr} → ${r.kind === "value" ? r.value : fmtNum(r.count) + " node(s)"} in ${r.elapsedMs.toFixed(1)} ms [${r.engine}${r.nsMode === "strict" ? ", strict namespaces" : ""}]${r.effectiveExpr ? ` — evaluated as ${r.effectiveExpr}` : ""}`,
+      );
+      if (r.warning) log("warning", r.warning);
     } catch (e: any) {
       setXpResult(null);
       setXpError(e.message);
