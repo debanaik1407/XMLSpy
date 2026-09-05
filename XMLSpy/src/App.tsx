@@ -7,7 +7,7 @@ import { BrowserView } from "./components/BrowserView";
 import { DocsView } from "./components/DocsView";
 import { BenchPanel, FindPanel, InfoPanel, MessagesPanel, ProjectPanel, XPathPanel, type Message } from "./components/Panels";
 import { XmlDocument, fmtBytes, fmtNum } from "./engine/document";
-import { createScanner } from "./engine/scanner";
+import { createScannerAuto, engineInfo, engineName, loadEngine } from "./engine/engine";
 import { EngineWorker, type SearchHit } from "./engine/worker";
 import { SAMPLE_BROKEN, SAMPLE_ORDERS, SAMPLE_XSD, generateCorpus } from "./engine/corpus";
 import { evaluateXPath, type XPathResult } from "./engine/xpath";
@@ -115,8 +115,9 @@ export default function App() {
         const mbps = res.elapsedMs > 0 ? (res.bytes / 1e6 / (res.elapsedMs / 1000)).toFixed(0) : "∞";
         const errs = res.result.errors;
         for (const e of errs.slice(0, 200).reverse()) log("error", e.msg, { line: e.line, col: e.col, docId: doc.id, fix: e.fix, error: e });
-        if (res.result.errorCount === 0) log("success", `${doc.name} is well-formed. Single-pass scan: ${fmtBytes(res.bytes)} in ${(res.elapsedMs / 1000).toFixed(2)} s (${mbps} MB/s), ${fmtNum(res.result.totalElements)} elements, ${fmtNum(res.result.lineCount)} lines, index ${fmtBytes(doc.stats.indexBytes)}.`);
-        else log("error", `${doc.name} is NOT well-formed: ${fmtNum(res.result.errorCount)} error(s) (${errs.length} listed). Scan ${fmtBytes(res.bytes)} in ${(res.elapsedMs / 1000).toFixed(2)} s (${mbps} MB/s).`);
+        const eng = res.engine === "rust-wasm" ? "Rust/WASM engine" : "TypeScript fallback engine";
+        if (res.result.errorCount === 0) log("success", `${doc.name} is well-formed. Single-pass scan (${eng}): ${fmtBytes(res.bytes)} in ${(res.elapsedMs / 1000).toFixed(2)} s (${mbps} MB/s), ${fmtNum(res.result.totalElements)} elements, ${fmtNum(res.result.lineCount)} lines, index ${fmtBytes(doc.stats.indexBytes)}.`);
+        else log("error", `${doc.name} is NOT well-formed: ${fmtNum(res.result.errorCount)} error(s) (${errs.length} listed). Scan ${fmtBytes(res.bytes)} in ${(res.elapsedMs / 1000).toFixed(2)} s (${mbps} MB/s, ${eng}).`);
       } catch (e: any) {
         log("error", `Indexing failed: ${e.message || e}`);
       } finally {
@@ -132,9 +133,10 @@ export default function App() {
       const t0 = performance.now();
       const headLen = Math.min(blob.size, HEAD_BYTES);
       const head = new Uint8Array(await blob.slice(0, headLen).arrayBuffer());
-      const sc = createScanner({ maxIndexed: 300_000, stride: 32, maxErrors: 0 });
+      const { scanner: sc } = await createScannerAuto({ maxIndexed: 300_000, stride: 32, maxErrors: 0 });
       sc.feed(head, 0);
-      const prov = sc.result();
+      const prov = sc.snapshot();
+      sc.free();
       const doc = new XmlDocument(name, blob, prov, 0, 0, text, headLen);
       doc.errors = [];
       setDocs((ds) => {
@@ -155,7 +157,7 @@ export default function App() {
         doc.stats.openToFirstPaintMs = performance.now() - t0;
         bump();
       });
-      log("info", `Opened ${name} (${fmtBytes(blob.size)}) — first screen from a ${fmtBytes(headLen)} provisional index in ${(performance.now() - t0).toFixed(0)} ms; ${blob.size >= XmlDocument.MEMORY_LIMIT ? "large-file mode: pages read on demand via Blob.slice, edits as overlay, streamed save" : "in-memory piece-table mode"}.`);
+      log("info", `Opened ${name} (${fmtBytes(blob.size)}) — first screen from a ${fmtBytes(headLen)} provisional index in ${(performance.now() - t0).toFixed(0)} ms [${engineName()}]; ${blob.size >= XmlDocument.MEMORY_LIMIT ? "large-file mode: pages read on demand via Blob.slice, edits as overlay, streamed save" : "in-memory piece-table mode"}.`);
       await indexDoc(doc, "Indexing");
       return doc;
     },
@@ -168,6 +170,12 @@ export default function App() {
   useEffect(() => {
     if (booted.current) return;
     booted.current = true;
+    loadEngine().then(() => {
+      const i = engineInfo();
+      if (i.name === "rust-wasm") log("success", `Engine: Rust ${i.rustc} → wasm32-unknown-unknown (${fmtBytes(i.wasmBytes)}, ABI v${i.abi}, ${i.profile}${i.simd128 ? ", simd128" : ""}). Scanner, structural index (.xsi) and streaming Finder all run in WebAssembly.`);
+      else log("warning", `Engine: TypeScript fallback${i.failure ? ` (WASM unavailable: ${i.failure})` : ""}.`);
+      bump();
+    });
     openText("PurchaseOrders.xml", SAMPLE_ORDERS);
     log("info", "XMLSpy-rs ready. Try: Project ▸ catalog-broken.xml (SmartFix), Project ▸ Generate 1 GiB corpus (large-file mode), Ctrl+2 Grid, Ctrl+3 Schema, Ctrl+Shift+E XPath, Ctrl+5 Architecture.");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -306,7 +314,7 @@ export default function App() {
         setHits(r.hits);
         setHitTotal(r.totalHits);
         const mbps = r.elapsedMs > 0 ? (r.bytes / 1e6 / (r.elapsedMs / 1000)).toFixed(0) : "∞";
-        log("info", `Find "${q}": ${fmtNum(r.totalHits)} hit(s) in ${(r.elapsedMs / 1000).toFixed(2)} s (${mbps} MB/s streamed).`);
+        log("info", `Find "${q}": ${fmtNum(r.totalHits)} hit(s) in ${(r.elapsedMs / 1000).toFixed(2)} s (${mbps} MB/s streamed, ${r.engine === "rust-wasm" ? "Rust/WASM Finder" : "JS fallback"}).`);
         if (r.hits[0]) setGoto({ line: r.hits[0].line, col: r.hits[0].col, nonce: Math.random() });
       } else log("warning", "Search cancelled.");
     } catch (e: any) {
@@ -588,13 +596,13 @@ export default function App() {
                 }} onFix={applyFix} onClear={() => setMessages([])} />}
                 {bottomTab === "find" && <FindPanel doc={active} onSearch={runSearch} onCancel={() => searchWorker?.cancel()} hits={hits} total={hitTotal} progress={searchProg} running={!!searchWorker} onGoto={(l, c) => gotoLine(l, c)} initialQuery={findQuery} />}
                 {bottomTab === "xpath" && <XPathPanel doc={active} onEval={runXPath} result={xpResult} error={xpError} running={xpRunning} onGoto={(l) => gotoLine(l)} onSelectNode={setSelectedNode} />}
-                {bottomTab === "bench" && <BenchPanel doc={active} frame={frame} memory={memory} onRescan={() => active && rescan(active, "Benchmark scan of")} blockCache={active?.cacheSize ?? 0} />}
+                {bottomTab === "bench" && <BenchPanel doc={active} frame={frame} memory={memory} onRescan={() => active && rescan(active, "Benchmark scan of")} blockCache={active?.cacheSize ?? 0} engine={engineInfo()} />}
               </div>
             )}
           </div>
         </main>
       </div>
-      <StatusBar doc={active} cursor={cursor} job={job ? { label: job.label, pct: job.pct, text: job.text } : null} frame={frame} memory={memory} view={view} />
+      <StatusBar doc={active} cursor={cursor} job={job ? { label: job.label, pct: job.pct, text: job.text } : null} frame={frame} memory={memory} view={view} engine={engineName()} />
     </div>
   );
 }

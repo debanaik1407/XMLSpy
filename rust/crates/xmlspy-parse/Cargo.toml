@@ -1,0 +1,16 @@
+[package]
+name = "xmlspy-parse"
+description = "Single-pass, chunk-resumable XML well-formedness scanner, structural indexer and streaming search."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+xmlspy-core.workspace = true
+xmlspy-index.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

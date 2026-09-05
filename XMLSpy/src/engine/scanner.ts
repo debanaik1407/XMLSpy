@@ -49,7 +49,9 @@ export function createScanner(cfg: ScannerConfig) {
     S_CDATAB2 = 21,
     S_DOCTYPE = 22,
     S_REF = 23,
-    S_BOM = 24;
+    S_BOM = 24,
+    S_BOM1 = 25,
+    S_BOM2 = 26;
 
   var state = S_BOM;
   var refReturn = S_TEXT;
@@ -272,12 +274,25 @@ export function createScanner(cfg: ScannerConfig) {
       reproc = false;
 
       switch (st) {
+        // A UTF-8 BOM may be split across chunk boundaries, so it is matched one byte
+        // at a time rather than by peeking ahead into this buffer (matches the Rust
+        // engine's St::Bom / Bom1 / Bom2).
         case S_BOM:
-          st = S_TEXT;
-          if (b === 0xef && i + 2 < n && buf[i + 1] === 0xbb && buf[i + 2] === 0xbf) {
-            i += 2;
+          if (b === 0xef) {
+            st = S_BOM1;
           } else {
+            st = S_TEXT;
             i--; // reprocess in S_TEXT
+            reproc = true;
+          }
+          break;
+        case S_BOM1:
+          st = b === 0xbb ? S_BOM2 : S_TEXT;
+          break;
+        case S_BOM2:
+          st = S_TEXT;
+          if (b !== 0xbf) {
+            i--;
             reproc = true;
           }
           break;
@@ -562,7 +577,7 @@ export function createScanner(cfg: ScannerConfig) {
     if (!rootSeen) {
       pushError(0, "Document is empty or has no root element. XML 1.0 §2.1 [1]", "Add a root element");
     }
-    if (state !== S_TEXT && state !== S_BOM) {
+    if (state !== S_TEXT && state !== S_BOM && state !== S_BOM1 && state !== S_BOM2) {
       pushError(totalBytes, "Unexpected end of file inside markup (unterminated tag, comment, CDATA or PI).");
     }
     if (depth > 0) {
