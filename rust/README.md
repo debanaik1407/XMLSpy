@@ -1,20 +1,24 @@
 # XMLSpy-rs — Rust engine
 
-The XML engine that the browser app actually runs. Five crates, **zero external
+The XML engine that the browser app actually runs. Eight crates, **zero external
 dependencies**, one C ABI, two front ends (WebAssembly and a native CLI).
 
 ~~~
 crates/
-  xmlspy-core    no_std + alloc   shared types: diagnostics, byte sources, limits, CHUNK_SIZE
-  xmlspy-index   no_std + alloc   StructuralIndex + the .xsi v1 serialisation codec
-  xmlspy-parse   no_std + alloc   the resumable Scanner state machine, SWAR byte classifier, Finder
-  xmlspy-wasm    std, cdylib      hand-written C ABI for the browser (no wasm-bindgen)
-  xmlspy-cli     std, bin         `xmlspy` — wf / index / info / search / gen / bench
+  xmlspy-core      no_std + alloc   shared types: diagnostics, byte sources, limits, CHUNK_SIZE
+  xmlspy-index     no_std + alloc   StructuralIndex, the .xsi v1 codec, folding/brackets/bookmarks
+  xmlspy-parse     no_std + alloc   the resumable Scanner state machine, SWAR byte classifier, Finder
+  xmlspy-rope      no_std + alloc   rope-of-pieces edit buffer (immutable original + append-only adds)
+  xmlspy-io        std              audited mmap, buffered fallback, .xsi cache (LRU), write-ahead journal
+  xmlspy-parallel  std              split pass + threaded segment scans + an exact merge
+  xmlspy-wasm      std, cdylib      hand-written C ABI for the browser (no wasm-bindgen)
+  xmlspy-cli       std, bin + lib   `xmlspy` — wf / index / info / search / gen / bench / edit / fold / recover / conformance
 ~~~
 
-`core`, `index` and `parse` are `no_std` + `alloc`, which is what lets the identical code
-serve a 32-bit WASM module and a native binary. Nothing is behind a feature flag or a
-`cfg(target_arch)` fork except the two front ends.
+`core`, `index`, `parse` and `rope` are `no_std` + `alloc`, which is what lets the identical
+code serve a 32-bit WASM module and a native binary. `unsafe` is confined to one audited
+module (`xmlspy-io/src/mmap.rs`); every other crate is `unsafe_code = "forbid"`. Nothing is
+behind a feature flag or a `cfg(target_arch)` fork except the two front ends.
 
 ## Build
 
@@ -60,6 +64,35 @@ elements are always indexed (so the top of the tree is never lost), with a hard 
 `2 × max_indexed`. Without the cap, a structural index of element-dense XML is *larger
 than the document itself* (112 % measured — see `bench/reports/`).
 
+**Parallel, but bit-identical.** `xmlspy-parallel` cuts a document at *legal* boundaries
+only: a sequential pass of the real `Scanner` (with `max_indexed = 0`, so it retains no
+records) captures a full `BoundaryState` at the first depth-1 element close at or after
+each target offset. One thread per segment resumes from its boundary, so every segment
+starts in exactly the state the sequential scanner would be in — depth, open-element stack,
+line, quote/CDATA/DOCTYPE sub-state. The merge then renumbers ids, remaps parents,
+concatenates checkpoints and diagnostics, re-applies the *global* element budget and patches
+the top-level element's end offset. The result equals a single sequential scan field for
+field; `xmlspy-parallel/src/merge.rs` carries the proof that a segment always retains a
+superset of what the merge keeps, and `tests/parity.rs` asserts the equality over 45 corpora
+× thread counts 1–8 × budgets 0–100 000 × strides 1–32. Because the split pass is
+sequential and costs a fraction `c` of a full scan, the speed-up ceiling is `1/(c + 1/N)` —
+reported, not promised.
+
+**mmap, a cache and a journal.** `xmlspy-io` maps documents read-only (audited, the
+workspace's only `unsafe`) with a buffered `read()` fallback, so `ByteSource::as_slice()`
+hands threads a shared `&[u8]` with no copy. `.xsi` indexes live in a byte-budgeted
+directory keyed by length + mtime + a CRC of the first and last 4 KiB, with LRU eviction.
+A parallel build journals each segment's `.xsi` **as it arrives** (CRC-guarded, torn-tail
+tolerant), so `xmlspy recover` finishes an interrupted build by re-scanning only the
+segments that never completed — and a committed build deletes its log.
+
+**Edits do not rewrite the document.** `xmlspy-rope` keeps the original buffer immutable and
+appends new bytes to a second buffer; an edit splits at most two pieces. A 3-byte edit in a
+4 MiB document leaves 3 pieces and an `unchanged_ratio` of 0.999999+, and saving streams the
+untouched runs straight from the original (`try_each_chunk`), which is the same shape as the
+browser's `Blob`-part save. `tests/props.rs` runs 5 seeds × 1500 random operations against a
+`Vec<u8>` oracle, checking every invariant after every operation.
+
 **One buffer crosses the ABI.** Results are serialised into a single `.xsi` v1 buffer
 (magic `XSI1`, 112-byte header, nine 8-byte-aligned sections) and decoded once on the JS
 side into transferable typed arrays. Offsets and counters cross as `f64`, so there is no
@@ -101,8 +134,9 @@ SmartFix suggestion string, since the UI matches those strings with regexes.
 `npm run test:parity` (from `../XMLSpy`) enforces that: 27 documents × 3 chunk sizes, all
 index arrays, the name table and every diagnostic compared field by field, plus a phase
 that runs the *minified production worker source* in a Node VM and diffs its output
-against the TypeScript scanner. Rust-side tests: `cargo test` — 41 tests across 11
-binaries (conformance, resumability, `.xsi` round-trips, CLI helpers).
+against the TypeScript scanner. Rust-side tests: `cargo test` — conformance, resumability,
+boundary round-trips, parallel/sequential parity, `.xsi` round-trips, rope properties,
+mmap/cache/journal behaviour, folding and bookmarks, and the CLI helpers.
 
 The one place they *did* disagree was a bug in the TypeScript scanner: it detected the
 UTF-8 BOM by peeking two bytes ahead, so a BOM split across chunks produced a spurious
@@ -120,6 +154,12 @@ rather than hiding it); it assumed a multi-core chunked scan on desktop hardware
 numbers, the `opt-level` study, and the routes to closing the gap:
 [`bench/reports/2026-09-05-linux-x86_64.md`](bench/reports/2026-09-05-linux-x86_64.md).
 
+Those numbers predate the mmap + parallel work and were measured on a 2-vCPU sandbox, which
+cannot show an 8-thread result. `xmlspy bench file.xml --threads 8 --min-segment 1MiB` now
+prints both routes (well-formedness with no index retained, and the full index) plus the
+sequential/parallel comparison and both gates; re-run it on real hardware and update the
+report. `./verify-phase1.sh` runs the whole Phase 1 gate set in one go.
+
 ## CLI
 
 ~~~bash
@@ -128,5 +168,21 @@ xmlspy index   file.xml --out f.xsi  # build + persist the structural index
 xmlspy info    f.xsi                 # inspect a .xsi
 xmlspy search  file.xml "needle"     # streaming literal search, grep-style output
 xmlspy gen     --size 256MiB --out big.xml
-xmlspy bench   file.xml              # 3 runs, throughput, index size, peak RSS, gates
+xmlspy bench   file.xml --threads 8  # both routes, sequential vs parallel, RSS, gates
+xmlspy edit    file.xml --insert-after 12 --text "  <row/>" --out edited.xml
+xmlspy fold    file.xml --lines 1-500   # fold regions; also --bracket OFFSET, --line N, --bookmark 1,5,9
+xmlspy recover file.xml              # finish an interrupted build from its journal
+xmlspy conformance --verbose         # the vendored mini suite (or --suite DIR for W3C xmlconf)
 ~~~
+
+Shared flags: `--threads N` (0 = auto), `--sequential`, `--min-segment 32MiB`,
+`--no-index`, `--cache-dir DIR`, `--cache-budget 2GiB`, `--journal`.
+
+## Conformance
+
+`rust/conformance/mini` is a vendored 41-case well-formedness suite (11 `wf`, 30 `not-wf`),
+one case per production and WFC the scanner implements, each not-wf case expecting a
+*specific* diagnostic substring. `xmlspy conformance --suite DIR` also runs an unpacked W3C
+`xmlconf` tree, classifying documents by directory (`not-wf/` must fail; `wf/`, `valid/`,
+`invalid/` must not). See [`conformance/mini/README.md`](conformance/mini/README.md) — the
+real W3C suite is not vendored and has to be downloaded where the network allows.

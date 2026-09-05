@@ -1,0 +1,17 @@
+[package]
+name = "xmlspy-io"
+description = "Native byte sources for the XMLSpy-rs engine: audited mmap, buffered fallback, the on-disk index cache with LRU eviction, and the write-ahead journal used for crash recovery."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+xmlspy-core.workspace = true
+
+[lints.rust]
+missing_docs = "warn"
+# `unsafe` is allowed in exactly one module (`mmap`), which carries a written audit.
+# Everything else in the crate must stay safe Rust.
+unsafe_code = "warn"

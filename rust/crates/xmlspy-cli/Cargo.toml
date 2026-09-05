@@ -1,11 +1,15 @@
 [package]
 name = "xmlspy-cli"
-description = "Headless XMLSpy-rs engine: well-formedness, indexing, streaming search, corpus generation, benchmarks."
+description = "Headless XMLSpy-rs engine: well-formedness, indexing, streaming search, rope edits, folding, crash recovery, conformance, corpus generation, benchmarks."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+
+[lib]
+name = "xmlspy_cli"
+path = "src/lib.rs"
 
 [[bin]]
 name = "xmlspy"
@@ -14,7 +18,10 @@ path = "src/main.rs"
 [dependencies]
 xmlspy-core.workspace = true
 xmlspy-index.workspace = true
+xmlspy-io.workspace = true
+xmlspy-parallel.workspace = true
 xmlspy-parse.workspace = true
+xmlspy-rope.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

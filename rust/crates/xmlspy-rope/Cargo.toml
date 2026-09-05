@@ -1,0 +1,12 @@
+[package]
+name = "xmlspy-rope"
+description = "Rope-of-pieces edit buffer for multi-GB XML: O(1)-ish insert/delete over an immutable original, streamed save that copies only what changed."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

@@ -9,6 +9,7 @@
     "build:wasm": "bash ../rust/build-wasm.sh",
     "preview": "vite preview",
     "test:parity": "node scripts/parity.mjs",
+    "test:conformance": "node scripts/conformance-mini.mjs",
     "test:xpath": "node scripts/xpath.test.mjs"
   },
   "dependencies": {
