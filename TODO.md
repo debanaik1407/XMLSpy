@@ -32,7 +32,7 @@ crates win.
 | Schema View (schema-from-instance) | Working, inference-only | **40 %** |
 | Browser View (XSLT 1.0) | Working, small docs only | **35 %** |
 | Find / Search | Literal streaming only | **40 %** |
-| XPath | Native 1.0 (small) + index subset (large) | **30 %** |
+| XPath | Namespace-aware native 1.0 (small) + index subset (large) | **40 %** |
 | Validation (XSD/DTD) | **Not started** | **0 %** |
 | SmartFix | 10 syntactic fixes, no schema-aware fixes | **35 %** |
 | Architecture & roadmap docs | Complete | **100 %** |
@@ -85,8 +85,12 @@ Breakdown of unwired items: Phase 1 → 3, Phase 2 → 3, Phase 3 → 17, Phase 
   - [x] Progressive open: 2 MiB provisional head index for instant first paint, swapped when the worker finishes
 - [x] **`pieceTable.ts` (162 L)** — original/add buffers, `insert`/`delete`/`replace`/`slice`,
       cached line-start table, `setLine`/`insertLineAfter`/`deleteLine`, chunked serialization
-- [x] **`xpath.ts` (167 L)** — native XPath 1.0 (DOMParser + `document.evaluate`) for in-memory docs;
-      index-backed evaluator for large docs (`/a/b`, `//b`, `*`, `[n]`, `count()`, `@attr`)
+- [x] **`xpath.ts` (399 L)** — namespace-aware native XPath 1.0 (DOMParser + `document.evaluate` with a
+      real `XPathNSResolver`) for in-memory docs; index-backed evaluator for large docs
+      (`/a/b`, `//b`, `*`, `[n]`, `count()`, `@attr`). "Match default namespace" binds unprefixed
+      *element* names to the document's `xmlns=` (attributes deliberately stay unprefixed);
+      strict mode keeps literal XPath 1.0 semantics and explains empty results.
+      Covered by `npm run test:xpath` (97 checks)
 - [x] **`schemaInfer.ts` (151 L)** — schema-from-instance: element inventory, parent/child sets,
       attribute inventory, primitive type guessing + merging, XSD 1.0 emission (Venetian Blind)
 - [x] **`highlight.ts` (168 L)** — per-line tokenizer with comment/CDATA state carry-over,
@@ -169,9 +173,24 @@ Breakdown of unwired items: Phase 1 → 3, Phase 2 → 3, Phase 3 → 17, Phase 
 - [ ] Case-insensitivity is ASCII-only (no Unicode case folding)
 
 ### 3.4 XPath
-- [ ] The version dropdown (XPath 3.1 / 2.0 / 1.0 / XQuery 3.1) is **cosmetic** — the selection is ignored
+- [x] ~~The version dropdown (XPath 3.1 / 2.0 / 1.0 / XQuery 3.1) is **cosmetic** — the selection is ignored~~
+      — it now defaults to **XPath 1.0 — native** (the truth), the others are labelled `(Phase 3)`
+      and picking one shows an inline notice that evaluation still runs as native 1.0
+- [x] ~~Unprefixed names silently match nothing on a namespaced document~~ — the sample
+      `PurchaseOrders.xml` declares `xmlns="urn:xmlspy:orders"`, so all five built-in chips
+      (`//PurchaseOrder[1]`, `count(//Item)`, …) returned **0 node(s)** with no explanation.
+      Fixed: a real `XPathNSResolver` + a "Match default namespace" toggle in the panel
+- [x] ~~Declared prefixes threw~~ — `dom.evaluate(expr, dom, null, …)` passed a `null` resolver, so
+      any `//o:Item` failed. Prefixes now resolve, including ones declared below the root
+- [x] ~~Large-file path matched everything for an unknown name~~ — `if (nameId === -2)` guarded a
+      sentinel `indexOf()` can never return, so `-1` (not found) fell through to the wildcard
+      branch: `//NoSuchElement` returned every element. Now an unknown name matches nothing
 - [ ] Large-file evaluator supports only `/a/b`, `//b`, `*`, `[n]`, `count()`, `@attr`
-      — no general predicates, functions, axes, variables, namespaces or sequence types
+      — no general predicates, functions, axes, variables or sequence types, and it matches the
+      index's literal QNames (bare local names in smart mode) without resolving `xmlns` declarations
+- [ ] The default-namespace binding is a syntactic rewrite, not a real XDM: `*:Name` name tests,
+      namespace nodes, `namespace-uri()` on the bound prefix and re-declared prefixes in a subtree
+      are not handled
 - [ ] In-memory path builds a full DOM (hard 16 MiB ceiling) and caps results at 2 000 nodes
 - [ ] No XQuery engine, no visual XPath builder, no expression explainer, no result export
 
@@ -294,7 +313,9 @@ Breakdown of unwired items: Phase 1 → 3, Phase 2 → 3, Phase 3 → 17, Phase 
 - [x] ~~No test suite at all~~ — `cargo test` (41 tests: conformance, resumability, `.xsi` round-trip,
       CLI helpers) and `npm run test:parity` (84 checks) now exist
 - [ ] Add Vitest + unit tests for the **TypeScript-only** modules: `pieceTable`, `document` paging,
-      `xpath`, `schemaInfer`, `highlight` (these are pure and trivially testable)
+      `schemaInfer`, `highlight` (these are pure and trivially testable). `xpath` is already covered
+      by `npm run test:xpath` — a zero-browser harness that runs the real `xpath.ts` against a
+      spec-conformant XPath 1.0 evaluator on documents indexed by the real scanner
 - [ ] Add Playwright smoke tests: open sample → F7 → SmartFix → Grid expand → XPath eval → save
 - [ ] **No CI.** Add `.github/workflows/ci.yml`: install → `tsc --noEmit` → lint → `npm run test:parity`
       → build, plus a Rust job (`cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`,
@@ -328,7 +349,7 @@ Breakdown of unwired items: Phase 1 → 3, Phase 2 → 3, Phase 3 → 17, Phase 
 | 6 | Namespace well-formedness + XML declaration/encoding validation in the scanner | Correctness gap vs. XML 1.0 + Namespaces 1.0 | 2 d |
 | 7 | Minimal streaming **XSD 1.0 validator** (structure + simple types) | F8 is the flagship XMLSpy action and does nothing today | 5 d |
 | 8 | Grid View editing (cell edit → overlay → re-index) | Makes Grid a real editor, reuses existing overlay plumbing | 3 d |
-| 9 | Real XPath 2.0/3.1 evaluator over the index (predicates, functions, axes) | Unblocks the XPath panel dropdown that is currently cosmetic | 5 d |
+| 9 | Real XPath 2.0/3.1 evaluator over the index (predicates, functions, axes) | Replaces the native-1.0 path and the index subset; the panel's `(Phase 3)` entries become real | 5 d |
 | 10 | Code folding + bracket matching + bookmarks in Text View | Remaining Phase-1 Text View scope | 3 d |
 
 **Strategic decision — answered (2026-09-05):** the Rust/WASM engine was built and is now the

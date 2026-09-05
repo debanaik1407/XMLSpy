@@ -138,7 +138,24 @@ answered. Details: [`rust/README.md`](./rust/README.md) and
 | `npm run preview` | Serve the production build |
 | `npx tsc --noEmit` | Type-check the whole project |
 | `npm run test:parity` | Diff the Rust/WASM engine against the TypeScript engine (84 checks) |
+| `npm run test:xpath` | XPath conformance: the real `xpath.ts` against a spec-correct XPath 1.0 evaluator (97 checks) |
 | `npm run build:wasm` | Rebuild the Rust engine → `src/engine/wasmBinary.ts` (needs Rust) |
+
+### XPath and namespaces
+
+XMLSpy-rs evaluates with the browser's native **XPath 1.0**. In XPath 1.0 an unprefixed name
+matches only nodes in *no* namespace — a default `xmlns="…"` on the document does **not** apply
+to the expression. Since the bundled sample (`PurchaseOrders.xml`) declares
+`xmlns="urn:xmlspy:orders"`, the XPath panel has a **Match default namespace** toggle (on by
+default): it binds unprefixed *element* names to that namespace, so `//Item` finds
+`<Item xmlns="urn:xmlspy:orders">`. Attribute names are deliberately left unprefixed, because an
+unprefixed attribute has no namespace even when a default `xmlns` is in scope.
+
+Turn the toggle off for literal XPath 1.0 semantics; an empty result then explains itself
+instead of silently reporting `0 node(s)`. Prefixes the document declares (`//xs:element`)
+resolve in both modes. When the panel shows `engine: index-path` the document is over 16 MiB and
+only the absolute-path subset (`/a/b`, `//b`, `*`, `[n]`, `count()`, `@attr`) is evaluated
+against the structural index.
 
 ### Running behind a proxy / remote preview URL
 
@@ -166,6 +183,8 @@ deleted if you never run remotely.)
 | Install fails behind a corporate proxy | `npm config set proxy http://user:pass@host:port` (and `https-proxy`). |
 | Broken install | `rm -rf node_modules package-lock.json && npm install` (Windows: `rmdir /s /q node_modules`). |
 | Status bar says `⚙ TS fallback` | WebAssembly was blocked (very old browser, or a CSP without `wasm-unsafe-eval`). The app still works, ~4× slower. |
+| XPath returns `0 node(s)` on a document that clearly has the element | The document has a default `xmlns="…"`. Keep **Match default namespace** on, or write `//*[local-name()='Item']`. See *XPath and namespaces* above. |
+| XPath says `is not a valid XPath expression` | You are on native XPath 1.0 — 2.0/3.1 syntax (`matches()`, `for $x in`, `:=`) is Phase 3. |
 | `npm run build:wasm` fails | Rust missing: install from <https://rustup.rs>, then `rustup target add wasm32-unknown-unknown`. |
 
 ---
@@ -195,6 +214,7 @@ XMLSpy/                  ← repo root
         │                 scanner (TS fallback), worker, document, pieceTable,
         │                 xpath, schemaInfer, highlight, corpus
         ├── scripts/      parity.mjs — Rust vs TypeScript engine diff
+        │                 xpath.test.mjs — XPath conformance (`npm run test:xpath`)
         ├── docs/         architecture, roadmap, rustCode
         └── utils/
 ```

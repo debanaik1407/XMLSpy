@@ -3,7 +3,7 @@ import type { NodeInfo, XmlDocument } from "../engine/document";
 import { fmtBytes, fmtNum } from "../engine/document";
 import type { WfError } from "../engine/scanner";
 import type { SearchHit } from "../engine/worker";
-import type { XPathResult } from "../engine/xpath";
+import type { NsMode, XPathResult } from "../engine/xpath";
 
 export type Message = { id: number; kind: "info" | "error" | "warning" | "success"; text: string; line?: number; col?: number; docId?: string; fix?: string; error?: WfError; time: string };
 
@@ -211,16 +211,27 @@ export function FindPanel({ doc, onSearch, onCancel, hits, total, progress, runn
 }
 
 // ---------------------------------------------------------------- XPath / XQuery
-export function XPathPanel({ doc, onEval, result, error, running, onGoto, onSelectNode }: { doc: XmlDocument | null; onEval: (expr: string) => void; result: XPathResult | null; error: string | null; running: boolean; onGoto: (line: number) => void; onSelectNode: (id: number) => void }) {
+export function XPathPanel({ doc, onEval, result, error, running, onGoto, onSelectNode }: { doc: XmlDocument | null; onEval: (expr: string, nsMode: NsMode) => void; result: XPathResult | null; error: string | null; running: boolean; onGoto: (line: number) => void; onSelectNode: (id: number) => void }) {
   const [expr, setExpr] = useState("//PurchaseOrder[1]");
-  const chips = ["//PurchaseOrder[1]", "count(//Item)", "/PurchaseOrders/PurchaseOrder[2]/Items/Item", "//Item/@PartNumber", "//*[1]"];
+  const [nsMode, setNsMode] = useState<NsMode>("smart");
+  const [version, setVersion] = useState("xpath1");
+  const versionLabel: Record<string, string> = { xpath1: "XPath 1.0", xpath2: "XPath 2.0", xpath31: "XPath 3.1", xquery31: "XQuery 3.1" };
+  const chips = ["//PurchaseOrder[1]", "count(//Item)", "/PurchaseOrders/PurchaseOrder[2]/Items/Item", "//Item/@PartNumber", "//Address[@Type='Shipping']", "//*[1]"];
+  const run = (e: string, m: NsMode = nsMode) => {
+    if (doc && e.trim()) onEval(e, m);
+  };
+  const toggleNs = () => {
+    const m: NsMode = nsMode === "smart" ? "strict" : "smart";
+    setNsMode(m);
+    run(expr, m); // re-run live so the effect of the toggle is visible
+  };
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center gap-2 px-2 py-1 text-[11px]" style={{ borderBottom: "1px solid var(--border)" }}>
-        <select className="input" defaultValue="xpath31">
-          <option value="xpath31">XPath 3.1</option>
-          <option value="xpath2">XPath 2.0</option>
-          <option value="xpath1">XPath 1.0</option>
+        <select className="input" value={version} onChange={(e) => setVersion(e.target.value)} title="The browser's native evaluator implements XPath 1.0; 2.0/3.1 and XQuery arrive with the Rust engine.">
+          <option value="xpath1">XPath 1.0 — native</option>
+          <option value="xpath2">XPath 2.0 (Phase 3)</option>
+          <option value="xpath31">XPath 3.1 (Phase 3)</option>
           <option value="xquery31">XQuery 3.1 (Phase 3)</option>
         </select>
         <input
@@ -228,29 +239,56 @@ export function XPathPanel({ doc, onEval, result, error, running, onGoto, onSele
           value={expr}
           onChange={(e) => setExpr(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") onEval(expr);
+            if (e.key === "Enter") run(expr);
           }}
           placeholder="XPath expression — Enter to evaluate"
         />
-        <button className="btn btn-primary" disabled={!doc || running} onClick={() => onEval(expr)}>
+        <label
+          className="flex items-center gap-1 cursor-pointer select-none whitespace-nowrap"
+          style={{ color: "var(--fg-muted)" }}
+          title={`What to do when the document declares a default namespace (xmlns="…").\n\nON  — unprefixed element names are bound to it, so //Item also finds <Item xmlns="urn:xmlspy:orders">.\n      Attribute names stay unprefixed: an unprefixed attribute has no namespace.\nOFF — literal XPath 1.0: an unprefixed name matches only nodes in no namespace, and an empty\n      result explains why instead of silently reporting 0 node(s).\n\nNo effect at all on documents without a default namespace.`}
+        >
+          <input type="checkbox" checked={nsMode === "smart"} onChange={toggleNs} disabled={!doc} />
+          Match default namespace
+        </label>
+        <button className="btn btn-primary" disabled={!doc || running} onClick={() => run(expr)}>
           {running ? "Evaluating…" : "Evaluate (Ctrl+Shift+E)"}
         </button>
       </div>
-      <div className="flex gap-1 px-2 py-1 flex-wrap" style={{ borderBottom: "1px solid var(--border)" }}>
+      <div className="flex gap-1 px-2 py-1 flex-wrap items-center" style={{ borderBottom: "1px solid var(--border)" }}>
         {chips.map((c) => (
-          <button key={c} className="btn mono" style={{ fontSize: 10.5 }} onClick={() => setExpr(c)}>
+          <button
+            key={c}
+            className="btn mono"
+            style={{ fontSize: 10.5 }}
+            onClick={() => {
+              setExpr(c);
+              run(c);
+            }}
+          >
             {c}
           </button>
         ))}
+        {version !== "xpath1" && (
+          <span className="text-[10.5px]" style={{ color: "var(--warn)" }}>
+            {versionLabel[version]} is not implemented yet — evaluating as native XPath 1.0, so 2.0/3.1-only syntax will fail.
+          </span>
+        )}
         {result && (
           <span className="ml-auto text-[10.5px]" style={{ color: "var(--fg-muted)" }}>
             engine: <b>{result.engine}</b> · {result.elapsedMs.toFixed(1)} ms · {fmtNum(result.count)} item(s)
+            {result.nsMode === "strict" ? " · strict namespaces" : ""}
           </span>
         )}
       </div>
       <div className="flex-1 overflow-auto text-[11.5px]">
         {error && <div className="p-2" style={{ color: "var(--err)" }}>{error}</div>}
         {result?.warning && <div className="px-2 py-1" style={{ color: "var(--warn)" }}>{result.warning}</div>}
+        {result?.defaultNamespace && result.nsMode === "smart" && result.effectiveExpr && (
+          <div className="px-2 py-1 mono text-[10.5px]" style={{ color: "var(--fg-muted)" }}>
+            xmlns="{result.defaultNamespace}" → evaluated as {result.effectiveExpr}
+          </div>
+        )}
         {result?.kind === "value" && (
           <div className="p-2 mono">
             = <b>{result.value}</b>
