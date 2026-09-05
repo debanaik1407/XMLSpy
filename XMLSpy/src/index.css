@@ -1,0 +1,248 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #f3f4f6;
+  --panel: #ffffff;
+  --panel-2: #f8fafc;
+  --border: #d1d5db;
+  --fg: #111827;
+  --fg-muted: #6b7280;
+  --accent: #1d4ed8;
+  --accent-soft: #dbeafe;
+  --sel: #e0ecff;
+  --gutter: #f1f5f9;
+  --gutter-fg: #94a3b8;
+  --err: #dc2626;
+  --err-soft: #fee2e2;
+  --warn: #d97706;
+  --ok: #16a34a;
+  --tok-tag: #7c2d12;
+  --tok-attr: #b45309;
+  --tok-val: #1d4ed8;
+  --tok-text: #111827;
+  --tok-comment: #6b7280;
+  --tok-cdata: #0f766e;
+  --tok-pi: #7e22ce;
+  --tok-ent: #be185d;
+  --tok-punct: #2563eb;
+}
+.dark {
+  --bg: #1e1e1e;
+  --panel: #252526;
+  --panel-2: #2d2d30;
+  --border: #3f3f46;
+  --fg: #d4d4d4;
+  --fg-muted: #9ca3af;
+  --accent: #3b82f6;
+  --accent-soft: #1e3a8a;
+  --sel: #264f78;
+  --gutter: #1e1e1e;
+  --gutter-fg: #6b7280;
+  --err: #f87171;
+  --err-soft: #451a1a;
+  --warn: #fbbf24;
+  --ok: #4ade80;
+  --tok-tag: #569cd6;
+  --tok-attr: #9cdcfe;
+  --tok-val: #ce9178;
+  --tok-text: #d4d4d4;
+  --tok-comment: #6a9955;
+  --tok-cdata: #4ec9b0;
+  --tok-pi: #c586c0;
+  --tok-ent: #d7ba7d;
+  --tok-punct: #808080;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-size: 12px;
+}
+.mono {
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+  font-size: 12.5px;
+}
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+.panel-title {
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+  font-weight: 600;
+  font-size: 11px;
+  padding: 3px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  user-select: none;
+}
+.btn {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--fg);
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.btn-primary:hover {
+  filter: brightness(1.1);
+  background: var(--accent);
+}
+.input {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--fg);
+  padding: 2px 6px;
+  font-size: 12px;
+  border-radius: 3px;
+  outline: none;
+}
+.input:focus {
+  border-color: var(--accent);
+}
+.tbtn {
+  width: 26px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  color: var(--fg);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.tbtn:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.tbtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.row-sel {
+  background: var(--sel) !important;
+}
+.row-err {
+  background: var(--err-soft);
+}
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border: 3px solid var(--panel);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--panel);
+}
+.md h1 {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 18px 0 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.md h2 {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 16px 0 6px;
+}
+.md h3 {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 12px 0 4px;
+}
+.md p {
+  margin: 6px 0;
+  line-height: 1.55;
+  max-width: 1100px;
+}
+.md ul,
+.md ol {
+  margin: 4px 0 8px 20px;
+  list-style: disc;
+  line-height: 1.5;
+}
+.md ol {
+  list-style: decimal;
+}
+.md pre {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  border-radius: 4px;
+  overflow: auto;
+  font-size: 11.5px;
+  line-height: 1.45;
+  margin: 8px 0;
+}
+.md code {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11.5px;
+  background: var(--panel-2);
+  padding: 0 3px;
+  border-radius: 2px;
+}
+.md pre code {
+  background: none;
+  padding: 0;
+}
+.md table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 11.5px;
+}
+.md th,
+.md td {
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.md th {
+  background: var(--panel-2);
+}
+.menu-item:hover {
+  background: var(--accent-soft);
+}
+@keyframes pulse-bar {
+  0% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.6;
+  }
+}
+.progress-anim {
+  animation: pulse-bar 1.2s infinite;
+}
