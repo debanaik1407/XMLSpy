@@ -1,0 +1,19 @@
+[package]
+name = "xmlspy-wasm"
+description = "C-ABI WebAssembly bindings: runs the XMLSpy-rs scanner and finder inside the browser worker."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+xmlspy-core.workspace = true
+xmlspy-index.workspace = true
+xmlspy-parse.workspace = true
+
+[lints.rust]
+missing_docs = "warn"

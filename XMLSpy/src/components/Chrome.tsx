@@ -370,7 +370,7 @@ export function ViewTabs({ view, onView, hasDoc }: { view: ViewKind; onView: (v:
   );
 }
 
-export function StatusBar({ doc, cursor, job, frame, memory, view }: { doc: XmlDocument | null; cursor: { line: number; col: number }; job: { label: string; pct: number; text: string } | null; frame: { p50: number; p99: number }; memory: number | null; view: ViewKind }) {
+export function StatusBar({ doc, cursor, job, frame, memory, view, engine }: { doc: XmlDocument | null; cursor: { line: number; col: number }; job: { label: string; pct: number; text: string } | null; frame: { p50: number; p99: number }; memory: number | null; view: ViewKind; engine?: "rust-wasm" | "typescript" }) {
   const cell = (t: string, title?: string) => (
     <span className="px-2 whitespace-nowrap" style={{ borderLeft: "1px solid var(--border)" }} title={title}>
       {t}
@@ -392,6 +392,15 @@ export function StatusBar({ doc, cursor, job, frame, memory, view }: { doc: XmlD
       {cell(`frame p50 ${frame.p50.toFixed(1)} ms · p99 ${frame.p99.toFixed(1)} ms`, "UI thread frame time (rAF)")}
       {memory !== null && cell(`heap ${fmtBytes(memory)}`, "JS heap (performance.memory)")}
       {cell("UTF-8")}
+      {engine && (
+        <span
+          className="px-2 whitespace-nowrap font-semibold"
+          style={{ borderLeft: "1px solid var(--border)", color: engine === "rust-wasm" ? "var(--ok)" : "var(--warn)" }}
+          title={engine === "rust-wasm" ? "Scanner, .xsi index and Finder run in the Rust engine compiled to WebAssembly" : "WebAssembly unavailable — using the TypeScript reference scanner"}
+        >
+          {engine === "rust-wasm" ? "⚙ Rust/WASM" : "⚙ TS fallback"}
+        </span>
+      )}
       {cell(view.toUpperCase())}
     </div>
   );

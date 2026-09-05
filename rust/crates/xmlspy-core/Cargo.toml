@@ -1,0 +1,12 @@
+[package]
+name = "xmlspy-core"
+description = "Shared types for the XMLSpy-rs engine: diagnostics, byte sources, limits."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"

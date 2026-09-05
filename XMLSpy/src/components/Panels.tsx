@@ -279,7 +279,9 @@ export function XPathPanel({ doc, onEval, result, error, running, onGoto, onSele
 }
 
 // ---------------------------------------------------------------- Benchmarks
-export function BenchPanel({ doc, frame, memory, onRescan, blockCache }: { doc: XmlDocument | null; frame: { p50: number; p99: number; max: number }; memory: number | null; onRescan: () => void; blockCache: number }) {
+export type EngineInfo = { name: string; failure: string | null; wasmBytes: number; rustc: string; simd128: boolean; profile: string; abi: number };
+
+export function BenchPanel({ doc, frame, memory, onRescan, blockCache, engine }: { doc: XmlDocument | null; frame: { p50: number; p99: number; max: number }; memory: number | null; onRescan: () => void; blockCache: number; engine?: EngineInfo }) {
   const Row = ({ k, v, gate, ok }: { k: string; v: string; gate?: string; ok?: boolean }) => (
     <tr>
       <td className="pr-4 py-[2px]" style={{ color: "var(--fg-muted)" }}>
@@ -304,6 +306,12 @@ export function BenchPanel({ doc, frame, memory, onRescan, blockCache }: { doc: 
       </div>
       <table>
         <tbody>
+          <Row
+            k="Engine"
+            v={engine ? (engine.name === "rust-wasm" ? `Rust ${engine.rustc} → wasm32-unknown-unknown · ${fmtBytes(engine.wasmBytes)} · ABI v${engine.abi}${engine.simd128 ? " · simd128" : ""}` : `TypeScript fallback${engine.failure ? ` (${engine.failure})` : ""}`) : "—"}
+            gate="crates/xmlspy-{core,index,parse,wasm}"
+            ok={engine ? engine.name === "rust-wasm" : undefined}
+          />
           <Row k="Open → first paint" v={s ? `${s.openToFirstPaintMs.toFixed(0)} ms` : "—"} gate="< 2000 ms (10 GB)" ok={s ? s.openToFirstPaintMs < 2000 : undefined} />
           <Row k="Single-pass WF + index scan" v={s ? `${(s.scanMs / 1000).toFixed(2)} s · ${mbps.toFixed(0)} MB/s (1 JS worker)` : "—"} gate="≥ 500 MB/s native SIMD Rust; browser JS worker ≈ 150–250 MB/s" ok={s ? mbps > 50 : undefined} />
           <Row k="Document size" v={s ? `${fmtBytes(s.bytes)} · ${fmtNum(s.lines)} lines · ${fmtNum(s.elements)} elements · depth ${s.maxDepth}` : "—"} />
@@ -315,7 +323,7 @@ export function BenchPanel({ doc, frame, memory, onRescan, blockCache }: { doc: 
         </tbody>
       </table>
       <p className="mt-3 max-w-[900px] leading-snug" style={{ color: "var(--fg-muted)" }}>
-        Methodology: timings are wall-clock from file selection to the first frame that paints real lines; the scan runs in a Blob-URL Web Worker reading 8 MiB page-aligned slices; frame time is sampled with requestAnimationFrame on the UI thread (p50/p99 over the last 240 frames). The Rust harness adds RSS via /proc/self/statm, criterion micro-benchmarks and CI regression gates (5 %).
+        Methodology: timings are wall-clock from file selection to the first frame that paints real lines; the scan runs in a Blob-URL Web Worker reading 8 MiB page-aligned slices and feeding them to the Rust scanner in WebAssembly (the same <code>xmlspy_parse::Scanner</code> the CLI runs — <code>cargo run -p xmlspy-cli -- bench file.xml</code> measures 292 MB/s single-thread natively on this class of hardware); frame time is sampled with requestAnimationFrame on the UI thread (p50/p99 over the last 240 frames). The Rust harness adds RSS via /proc/self/statm, criterion micro-benchmarks and CI regression gates (5 %).
       </p>
     </div>
   );

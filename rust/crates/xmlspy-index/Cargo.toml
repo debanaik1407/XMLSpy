@@ -1,0 +1,15 @@
+[package]
+name = "xmlspy-index"
+description = "Structural index for multi-GB XML documents and its mmap-able .xsi on-disk format."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+xmlspy-core.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
